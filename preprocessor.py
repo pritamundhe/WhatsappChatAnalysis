@@ -38,7 +38,7 @@ def preprocess(data: str) -> pd.DataFrame:
         except (ValueError, TypeError):
             continue
     else:
-        df['message_date'] = pd.to_datetime(df['message_date'], infer_datetime_format=True)
+        df['message_date'] = pd.to_datetime(df['message_date'], format='mixed')
 
     df.rename(columns={'message_date': 'date'}, inplace=True)
 

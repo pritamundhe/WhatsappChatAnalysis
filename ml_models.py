@@ -1,7 +1,6 @@
 """
-ml_models.py — Machine Learning Module for WhatsApp Chat Analysis
-=================================================================
-Includes:
+Machine Learning Module for WhatsApp Chat Analysis
+
   1. Sentiment Analysis   — VADER + TextBlob ensemble
   2. Topic Modeling       — LDA via scikit-learn
   3. Behavior Prediction  — RandomForest peak-hour predictor
@@ -10,10 +9,14 @@ Includes:
 """
 
 import re
+import os
 import warnings
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 
 warnings.filterwarnings('ignore')
 
@@ -308,47 +311,45 @@ def detect_spam(df: pd.DataFrame) -> pd.DataFrame:
 def summarize_chat(df: pd.DataFrame, selected_user: str = 'Overall',
                    n_sentences: int = 5) -> str:
     """
-    Frequency-based extractive summarization.
-    Scores sentences by the sum of normalised TF of content words.
+    AI-based chat summarization using LangChain and DeepSeek.
     """
     work = df.copy()
     if selected_user != 'Overall':
         work = work[work['user'] == selected_user]
 
     work = work[~work['message'].str.startswith('<Media omitted>')].copy()
-    text = ' '.join(work['message'].tolist())
+    work = work[~work['message'].str.contains('This message was deleted', na=False)].copy()
+    
+    # Take the last 800 messages to avoid exceeding context limits
+    messages = work['message'].tail(800).tolist()
+    text = '\n'.join(messages)
 
-    # Tokenize into sentences (basic fallback)
-    try:
-        sentences = sent_tokenize(text)
-    except Exception:
-        sentences = [s.strip() for s in re.split(r'[.!?]', text) if len(s.strip()) > 10]
-
-    if not sentences:
+    if not text.strip():
         return "Not enough text to summarize."
 
-    # Word frequency
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
-    freq = Counter(w for w in words if w not in _ALL_STOP)
+    load_dotenv()
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    
+    if not api_key:
+        return "API key not found. Please set DEEPSEEK_API_KEY in the .env file."
+    
+    try:
+        llm = ChatOpenAI(
+            api_key=api_key, 
+            base_url="https://api.deepseek.com/v1", 
+            model="deepseek-chat",
+            max_tokens=1000
+        )
+        
+        prompt = f"""
+Please provide a concise summary of the following WhatsApp chat conversation. 
+Focus on the main topics discussed, the overall tone, and any key decisions or events.
+Keep the summary to approximately {n_sentences} sentences.
 
-    if not freq:
-        return "Not enough meaningful words to summarize."
-
-    max_freq = max(freq.values())
-    norm_freq = {w: v / max_freq for w, v in freq.items()}
-
-    # Score sentences
-    scores = {}
-    for sent in sentences:
-        toks = re.findall(r'\b[a-zA-Z]{3,}\b', sent.lower())
-        score = sum(norm_freq.get(t, 0) for t in toks)
-        if len(toks):
-            scores[sent] = score / len(toks)
-
-    if not scores:
-        return "Could not generate summary."
-
-    top = sorted(scores, key=scores.get, reverse=True)[:n_sentences]
-    # Return in original order
-    ordered = [s for s in sentences if s in top]
-    return ' '.join(ordered[:n_sentences])
+Chat:
+{text[-25000:]} 
+"""
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+    except Exception as e:
+        return f"Could not generate AI summary. Error: {str(e)}"
